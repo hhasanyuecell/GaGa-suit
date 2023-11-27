@@ -27,11 +27,13 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
     private List<float> accelerations = new List<float>();
 
     private List<float> time_sum_list = new List<float>(); //
-    //private List<int> update_sum_list = new List<int>(); //
     private List<String> DateTime_list = new List<String>();
     private List<double> DateTime_sum_list = new List<double>();
     private List<int> stepCount_sum_list = new List<int>(); //
     private List<double> last_step_time_list = new List<double>();
+    private List<float> step_length_sum_list = new List<float>(); // frame based accumulation
+    private List<Vector3> hip_pos_list = new List<Vector3>();
+    private List<float> step_hip_list = new List<float>(); // one distance calculation per step
 
     private float legLength;
     private float startTime;
@@ -91,13 +93,11 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
     public Text fpsText;  // just for checking the real fps
     public float deltaTime_1; //
     public float time_sum;  //
-    public int update_sum;  //
     public DateTime date1; //
     public DateTime dateprev; //
     public DateTime dateprevStep; //
     public double DateTime_sum;  //
     public int step_count; //
-    public double last_step_time; //
 
 
     void Start()
@@ -122,11 +122,9 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
         startTime = Time.time;
 
         time_sum = 0.0f; //
-        update_sum = 0;  //
-        DateTime_sum = 0;//
+        DateTime_sum = 0; //
         step_count = 0; //
-        stepChange = true;
-        last_step_time = 0;
+        stepChange = true; //
 
         Debug.Log("onQuit, the DateTime.Now with millisec is: " + DateTime.Now + " :" + DateTime.UtcNow.Millisecond); //
 
@@ -204,11 +202,11 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
 
         time_sum += Time.deltaTime; //
         time_sum_list.Add(time_sum); //
-        update_sum++; //
-        //update_sum_list.Add(update_sum); //
         DateTime_list.Add(DateTime.Now.ToString() + " :" + DateTime.Now.Millisecond.ToString());//
         DateTime_sum_list.Add(Calc_Diff_DateTime(dateprev, DateTime.Now));
         last_step_time_list.Add(-1);
+        step_length_sum_list.Add(-1);
+        step_hip_list.Add(-1);
 
 
         // Check if all the limb transforms have been found
@@ -320,6 +318,8 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
                 // Calculate the velocity of the "hips" node on the horizontal plane (X and Z axes)
                 Vector3 currentHipsPosition = new Vector3(hips.position.x, 0.0f, hips.position.z); // Project position on the horizontal plane
                 Vector3 hipsVelocity = (currentHipsPosition - prevHipsPosition) / Time.deltaTime;
+                hip_pos_list.Add(currentHipsPosition);
+                //Debug.Log("currentHipsPosition  :  " + currentHipsPosition);
 
                 // Store the magnitude of the hips velocity
                 hipsVelocityMagnitude = hipsVelocity.magnitude;                
@@ -357,12 +357,12 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
         LayerMask groundLayer = LayerMask.GetMask("Ground"); // Assuming "Ground" is the layer of your "Plane" GameObject
         if (Physics.Raycast(foot.position, Vector3.down, out hit, 0.1f, groundLayer))
         {
-            Debug.Log("Foot grounded: " + foot.name);
+            //Debug.Log("Foot grounded: " + foot.name);
             return true; // Foot is in contact with the ground
         }
         else
         {
-            Debug.Log("Foot not grounded: " + foot.name);
+            //Debug.Log("Foot not grounded: " + foot.name);
         }
         return false; // Foot is not in contact with the ground
     }
@@ -378,6 +378,18 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
         return ts2.TotalMilliseconds;
     }
 
+    private String Comma_vs_Dot(float x)
+    {
+       
+        if (x >= 0){
+            return x.ToString("F6", CultureInfo.InvariantCulture);
+        }
+        else
+        {
+            return x.ToString();
+        }
+    }
+
     void OnApplicationQuit()
     {
         int minCount = Mathf.Min(strideLengthsRight.Count, rightFootGroundedStates.Count);
@@ -385,20 +397,39 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
         // timing section start
 
         float[] time_sum_ar = time_sum_list.ToArray();
-        //int[] update_sum_ar = update_sum_list.ToArray();
-        String[] DateTime_ar = DateTime_list.ToArray();
-        double[] DateTime_sum_ar = DateTime_sum_list.ToArray();
-        int[] stepCount_sum_ar = stepCount_sum_list.ToArray();
-        double[] last_step_time_ar = last_step_time_list.ToArray();
+        String[] DateTime_ar = DateTime_list.ToArray(); // measured values from origin script
+        double[] DateTime_sum_ar = DateTime_sum_list.ToArray(); // calculated
+        int[] stepCount_sum_ar = stepCount_sum_list.ToArray(); // increases with every new steps
+        double[] last_step_time_ar = last_step_time_list.ToArray(); // at new step frame timesum value, Rest frames -1 values
+        float[] stepLength_ar = stepLengths.ToArray(); // measured values from origin script
+        float[] step_length_sum_ar = step_length_sum_list.ToArray(); // at new step frame step lenght sum value, Rest frames -1 values
 
-        double prevFrame = DateTime_sum_ar[2]; 
+        double prevFrame = DateTime_sum_ar[2];
+        float Step_length_sum = stepLengths[2];
+        Vector3 hip_pos_prev = hip_pos_list[3];  // 4rd frame, because pos at 1st, 2nd and 3rd frame biased from initialization process 
+        //Debug.Log("hip_pos_prev" + hip_pos_prev);
 
-        // duration time of a every single step based on stepchange
-        for (int j = 0; j < minCount; j++)        {
+        // framebased accumulation duration time of a every single step based on stepchange
+        for (int j = 0; j < minCount; j++){
             if (j > 0){
-                if (stepCount_sum_ar[j] != (stepCount_sum_ar[j - 1])){
+
+                // accumulate every step frame delta
+                Step_length_sum += Mathf.Abs((stepLength_ar[j] - stepLength_ar[j - 1]));
+
+                if (stepCount_sum_ar[j] != stepCount_sum_ar[j - 1]){
+
+                    // duration time of a single step based on stepchange
                     last_step_time_ar[j] = DateTime_sum_ar[j] - prevFrame;
                     prevFrame = DateTime_sum_ar[j];
+
+                    // total length of a single step  (accumulated distances in every frame while making a step)
+                    step_length_sum_ar[j] = Step_length_sum;
+                    Step_length_sum = 0;
+
+                    // distance between prev hip position and next hup position - direct calculation
+                    step_hip_list[j] = Vector3.Distance(hip_pos_list[j], hip_pos_prev);
+                    hip_pos_prev = hip_pos_list[j];
+
                 }
             }
         }
@@ -417,6 +448,11 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
                 "last_step_time_ar," +
                 "RightFootGround," +
                 "LeftFootGround," +
+                "step_length_sum_ar," +
+                "hip_pos_list x," +
+                "      y  ," +
+                "      z  ," +
+                "step_hip_list," +
                 "LegLength," +
                 "StepLength," +
                 "StepLengthRatio," +
@@ -432,6 +468,7 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
                 "VelocityRatio," +
                 "Acceleration," +
                 "AccelerationRatio," +
+                /*
                 "RightThighRotationX," +
                 "RightThighRotationY," +
                 "RightThighRotationZ," +
@@ -456,12 +493,13 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
                 "LeftShoulderRotationY," +
                 "LeftShoulderRotationZ," +
                 "LeftShoulderRotationW," +
+                */
                 "HeadRotationX," +
                 "HeadRotationY," +
                 "HeadRotationZ," +
                 "HeadRotationW");
 
-            CultureInfo culture = CultureInfo.InvariantCulture;
+            CultureInfo culture = CultureInfo.InvariantCulture; // use decimal dot instead of decimal comma for proper csv output
 
             for (int i = 0; i < minCount; i++)
             {
@@ -485,10 +523,13 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
              /*G*/  $"{last_step_time_ar[i]}," +
                     $"{rightFootGroundedStates[i]}," +
                     $"{leftFootGroundedStates[i]}," +
-             /*J*/  $"{legLengths[i].ToString("F6", culture)}," +
+                    $"{Comma_vs_Dot(step_length_sum_ar[i])},"  +
+                    $"{hip_pos_list[i].ToString("F6", culture)}," +
+                    $"{Comma_vs_Dot(step_hip_list[i])}," +
+                    $"{legLengths[i].ToString("F6", culture)}," +
                     $"{stepLengths[i].ToString("F6", culture)}," +
                     $"{(stepLengths[i] / legLengths[i]).ToString("F6", culture)}," +
-             /*M*/  $"{strideWidths[i].ToString("F6", culture)}," +
+                    $"{strideWidths[i].ToString("F6", culture)}," +
                     $"{(strideWidths[i] / legLengths[i]).ToString("F6", culture)}," +
                     $"{strideLengthsRight[i].ToString("F6", culture)}," +
                     $"{(strideLengthsRight[i] / legLengths[i]).ToString("F6", culture)}," +
@@ -500,6 +541,7 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
                     $"{(velocitys[i] / legLengths[i]).ToString("F6", culture)}," +
                     $"{accelerations[i].ToString("F6", culture)}," +
                     $"{(accelerations[i] / legLengths[i]).ToString("F6", culture)}," +
+                    /*
                     $"{rightThighRotation.x.ToString("F6", culture)}," +
                     $"{rightThighRotation.y.ToString("F6", culture)}," +
                     $"{rightThighRotation.z.ToString("F6", culture)}," +
@@ -524,6 +566,7 @@ public class GaitAnalysisScript : MonoBehaviour //TODO: Change directory to save
                     $"{leftShoulderRotation.y.ToString("F6", culture)}," +
                     $"{leftShoulderRotation.z.ToString("F6", culture)}," +
                     $"{leftShoulderRotation.w.ToString("F6", culture)}," +
+                    */
                     $"{headRotation.x.ToString("F6", culture)}," +
                     $"{headRotation.y.ToString("F6", culture)}," +
                     $"{headRotation.z.ToString("F6", culture)}," +
